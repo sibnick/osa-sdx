@@ -7,7 +7,13 @@ from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
 
-from menu_app import get_sodexo_menu, format_menu, DEFAULT_URL
+try:
+    import newrelic.agent
+    newrelic.agent.initialize()
+except ImportError:
+    newrelic = None
+
+from menu_app import get_sodexo_menu, format_menu, DEFAULT_URL, instrument_task
 
 # Load environment variables
 load_dotenv()
@@ -17,7 +23,15 @@ if not API_TOKEN:
     logging.warning("TELEGRAM_BOT_TOKEN not found in environment variables!")
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+handler = logging.StreamHandler()
+
+if newrelic:
+    from newrelic.agent import NewRelicContextFormatter
+    handler.setFormatter(NewRelicContextFormatter())
+
+logger.addHandler(handler)
 
 # Initialize bot and dispatcher
 bot = Bot(token=API_TOKEN)
@@ -107,6 +121,7 @@ def format_menu_with_total(date_str, menu_data, user_id):
     return "\n".join(lines)
 
 @dp.message(Command("start"))
+@instrument_task
 async def cmd_start(message: types.Message):
     await message.answer(
         "👋 <b>Welcome to Sodexo Berlin Menu Bot!</b>\n\n"
@@ -117,6 +132,7 @@ async def cmd_start(message: types.Message):
     )
 
 @dp.message(Command("menu"))
+@instrument_task
 async def cmd_menu(message: types.Message):
     await message.answer("📅 Select a date:", reply_markup=get_date_keyboard())
 
@@ -125,6 +141,7 @@ async def process_back_to_dates(callback: types.CallbackQuery):
     await callback.message.edit_text("📅 Select a date:", reply_markup=get_date_keyboard())
 
 @dp.callback_query(F.data.startswith("menu_"))
+@instrument_task
 async def process_menu_callback(callback: types.CallbackQuery):
     date_str = callback.data.split("_")[1]
     user_id = callback.from_user.id
@@ -149,6 +166,7 @@ async def process_menu_callback(callback: types.CallbackQuery):
         await callback.message.edit_text(f"❌ <b>Error fetching menu:</b>\n{e}", parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("select_"))
+@instrument_task
 async def process_item_selection(callback: types.CallbackQuery):
     parts = callback.data.split("_")
     date_str = parts[1]
@@ -191,6 +209,7 @@ async def process_clear_selections(callback: types.CallbackQuery):
     await callback.answer("Selections cleared.")
 
 @dp.message(F.text.regexp(r"\d{2}\.\d{2}"))
+@instrument_task
 async def process_text_date(message: types.Message):
     await message.answer("Please use the interactive menu to select items and calculate calories.", reply_markup=get_date_keyboard())
 

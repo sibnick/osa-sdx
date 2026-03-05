@@ -4,9 +4,19 @@ import json
 import argparse
 import datetime
 import re
+try:
+    import newrelic.agent
+except ImportError:
+    newrelic = None
 from playwright.async_api import async_playwright
 from deep_translator import GoogleTranslator
 
+def instrument_task(func):
+    if newrelic:
+        return newrelic.agent.background_task()(func)
+    return func
+
+@instrument_task
 async def get_sodexo_menu(url: str, headless: bool, target_date_str: str = None, fetch_calories: bool = True):
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=headless)
