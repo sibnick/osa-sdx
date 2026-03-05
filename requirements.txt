@@ -1,4 +1,0 @@
-playwright==1.49.0
-deep-translator==1.11.4
-aiogram==3.13.0
-python-dotenv==1.0.1
