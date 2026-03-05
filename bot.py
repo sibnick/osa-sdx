@@ -1,10 +1,17 @@
 import os
 try:
     import newrelic.agent
-    # Initialize as early as possible
+    # Initialize agent
     newrelic.agent.initialize()
+    # Explicitly enable log forwarding if not set via environment
+    settings = newrelic.agent.global_settings()
+    if settings.license_key:
+        print(f"✅ New Relic Agent initialized for app: {settings.app_name}")
+    else:
+        print("⚠️ New Relic Agent initialized but NO LICENSE KEY found.")
 except ImportError:
     newrelic = None
+    print("❌ New Relic library not found.")
 
 import asyncio
 import logging
