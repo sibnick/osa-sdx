@@ -1,4 +1,11 @@
 import os
+try:
+    import newrelic.agent
+    # Initialize as early as possible
+    newrelic.agent.initialize()
+except ImportError:
+    newrelic = None
+
 import asyncio
 import logging
 import datetime
@@ -6,12 +13,6 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
-
-try:
-    import newrelic.agent
-    newrelic.agent.initialize()
-except ImportError:
-    newrelic = None
 
 from menu_app import get_sodexo_menu, format_menu, DEFAULT_URL, instrument_task
 
@@ -92,7 +93,7 @@ def format_menu_with_total(date_str, menu_data, user_id):
         cat_name = category['categoryName'].upper()
         if category.get('categoryName_ru'):
             cat_name += f" ({category['categoryName_ru'].upper()})"
-        lines.append(f"<b>━━━ {cat_name} ━━━</b>")
+        lines.append(f"<b>{cat_name}</b>")
         
         for item in category['items']:
             is_selected = item_idx in selections
