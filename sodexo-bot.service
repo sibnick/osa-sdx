@@ -1,0 +1,20 @@
+[Unit]
+Description=Sodexo Menu Telegram Bot (Podman)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Environment=PODMAN_SYSTEMD_UNIT=%n
+Restart=on-failure
+TimeoutStopSec=70
+# Remove existing container if it stayed around
+ExecStartPre=-/usr/bin/podman rm -f sodexo-bot
+# Start the container
+ExecStart=/usr/bin/podman run --name sodexo-bot --env-file /home/nikolay/projects/antigravity/sodexo/.env sodexo-bot
+# Stop and cleanup
+ExecStop=/usr/bin/podman stop -t 10 sodexo-bot
+ExecStopPost=-/usr/bin/podman rm -f sodexo-bot
+Type=simple
+
+[Install]
+WantedBy=default.target
