@@ -225,7 +225,7 @@ def format_menu(menu_data, telegram=False):
         cat_name = category['categoryName'].upper()
         if category.get('categoryName_ru'):
             cat_name += f" ({category['categoryName_ru'].upper()})"
-        lines.append(f"--- {cat_name} ---")
+        lines.append(cat_name)
         for item in category['items']:
             cal = item.get('calories', '')
             cal_str = f" ({cal} kcal)" if cal else ""
