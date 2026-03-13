@@ -5,8 +5,9 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-# Install system dependencies for Playwright
+# Install system dependencies for Playwright and tini
 RUN apt-get update && apt-get install -y \
+    tini \
     libnss3 \
     libnspr4 \
     libatk1.0-0 \
@@ -40,5 +41,6 @@ RUN playwright install chromium
 # Copy application code
 COPY . .
 
-# Run the bot
+# Run the bot with tini as init
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["python", "bot.py"]
