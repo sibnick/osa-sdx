@@ -136,6 +136,7 @@ async def get_sodexo_menu(url: str, headless: bool, target_date_str: str = None,
                                 nutri_tab_selector = '.mdc-tab:has-text("NÄHRWERTE"), .mdc-tab:has-text("NUTRITIONAL INFORMATION")'
                                 await page.wait_for_selector(nutri_tab_selector, timeout=5000)
                                 await page.click(nutri_tab_selector)
+                                await asyncio.sleep(0.6) # Wait for table to render
                                 
                                 # Extract all nutritional info from the table
                                 nutrients = await page.evaluate('''() => {
@@ -155,22 +156,28 @@ async def get_sodexo_menu(url: str, headless: bool, target_date_str: str = None,
                                 # Map German/English keys to our internal keys
                                 item['nutrients'] = {}
                                 for label, value in nutrients.items():
-                                    if 'kcal' in label or 'brennwert' in label:
-                                        match = re.search(r'(\d+)\s*kcal', value)
+                                    if 'kcal' in label or 'brennwert' in label or 'energy' in label:
+                                        # Value could be "1.819 kJ 435 kcal" or "1,819 kJ 435 kcal"
+                                        # Look for the number before 'kcal'
+                                        match = re.search(r'([\d.,]+)\s*kcal', value)
                                         if match:
-                                            item['calories'] = int(match.group(1))
-                                            item['nutrients']['energy_kcal'] = int(match.group(1))
+                                            cal_str = match.group(1).replace(',', '').replace('.', '') # Remove thousand separators
+                                            item['calories'] = int(cal_str)
+                                            item['nutrients']['energy_kcal'] = int(cal_str)
                                         
-                                        match_kj = re.search(r'(\d+)\s*kj', value.lower())
+                                        match_kj = re.search(r'([\d.,]+)\s*kj', value.lower())
                                         if match_kj:
-                                            item['nutrients']['energy_kj'] = int(match_kj.group(1))
+                                            kj_str = match_kj.group(1).replace(',', '').replace('.', '')
+                                            item['nutrients']['energy_kj'] = int(kj_str)
                                     
                                     elif 'fett' in label or 'fat' in label:
-                                        item['nutrients']['fat'] = value
+                                        if 'gesättigte' not in label and 'saturates' not in label:
+                                            item['nutrients']['fat'] = value
                                     elif 'eiweiß' in label or 'protein' in label:
                                         item['nutrients']['protein'] = value
                                     elif 'kohlenhydrate' in label or 'carbohydrate' in label:
-                                        item['nutrients']['carbs'] = value
+                                        if 'zucker' not in label and 'sugars' not in label:
+                                            item['nutrients']['carbs'] = value
                                     elif 'salz' in label or 'salt' in label:
                                         item['nutrients']['salt'] = value
                                 

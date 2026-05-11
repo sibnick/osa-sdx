@@ -21,10 +21,39 @@ import re
 def parse_value(val):
     if not val: return 0.0
     if isinstance(val, (int, float)): return float(val)
-    match = re.search(r'(\d+[.,]?\d*)', str(val))
-    if match:
-        return float(match.group(1).replace(',', '.'))
-    return 0.0
+    s = str(val).strip()
+    # Remove everything except digits, dots, and commas
+    s = re.sub(r'[^\d.,]', '', s)
+    if not s: return 0.0
+    
+    # If both exist, determine by positions
+    if '.' in s and ',' in s:
+        if s.rfind('.') < s.rfind(','): # German 1.234,56
+            s = s.replace('.', '').replace(',', '.')
+        else: # English 1,234.56
+            s = s.replace(',', '')
+    elif ',' in s:
+        # If it's like "1,819" it's likely thousand (English). If "19,0" it's decimal (German).
+        parts = s.split(',')
+        if len(parts) == 2 and len(parts[1]) == 3:
+            # Ambiguous. If the value is for energy, it's thousands. 
+            # If it's for salt/fat, it's decimal. 
+            # Most nutrients are < 100.
+            if float(s.replace(',', '.')) < 100: s = s.replace(',', '.')
+            else: s = s.replace(',', '')
+        else:
+            s = s.replace(',', '.')
+    elif '.' in s:
+        # If it's like "1.819" it's likely thousand (German). If "19.0" it's decimal (English).
+        parts = s.split('.')
+        if len(parts) == 2 and len(parts[1]) == 3:
+            if float(s) < 100: pass # keep as is
+            else: s = s.replace('.', '')
+            
+    try:
+        return float(s)
+    except:
+        return 0.0
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
