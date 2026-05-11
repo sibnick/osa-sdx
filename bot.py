@@ -16,6 +16,15 @@ except ImportError:
 import asyncio
 import logging
 import datetime
+import re
+
+def parse_value(val):
+    if not val: return 0.0
+    if isinstance(val, (int, float)): return float(val)
+    match = re.search(r'(\d+[.,]?\d*)', str(val))
+    if match:
+        return float(match.group(1).replace(',', '.'))
+    return 0.0
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -94,7 +103,7 @@ def format_menu_with_total(date_str, menu_data, user_id):
     lines = []
     lines.append(f"🗓 <b>SODEXO MENU - {date_str}</b>\n")
     
-    total_calories = 0
+    totals = {'kcal': 0, 'fat': 0.0, 'protein': 0.0, 'carbs': 0.0, 'salt': 0.0}
     item_idx = 0
     for category in menu_data:
         cat_name = category['categoryName'].upper()
@@ -107,25 +116,41 @@ def format_menu_with_total(date_str, menu_data, user_id):
             name = item['name'].replace('<', '&lt;').replace('>', '&gt;')
             price = item['price'].replace('<', '&lt;').replace('>', '&gt;')
             cal = item.get('calories')
+            nutri = item.get('nutrients', {})
             
             if is_selected:
-                total_calories += int(cal) if isinstance(cal, int) else 0
+                totals['kcal'] += int(cal) if isinstance(cal, (int, str)) and str(cal).isdigit() else 0
+                totals['fat'] += parse_value(nutri.get('fat'))
+                totals['protein'] += parse_value(nutri.get('protein'))
+                totals['carbs'] += parse_value(nutri.get('carbs'))
+                totals['salt'] += parse_value(nutri.get('salt'))
                 prefix = "✅ "
             else:
                 prefix = "• "
                 
             cal_str = f" | ⚡ {cal} kcal" if cal else ""
             lines.append(f"{prefix}<b>{name}</b>")
+            
+            nutri_list = []
+            if nutri.get('fat'): nutri_list.append(f"🥩 Fat: {nutri['fat']}")
+            if nutri.get('carbs'): nutri_list.append(f"🍞 Carbs: {nutri['carbs']}")
+            if nutri.get('protein'): nutri_list.append(f"💪 Protein: {nutri['protein']}")
+            if nutri.get('salt'): nutri_list.append(f"🧂 Salt: {nutri['salt']}")
+            
             lines.append(f"  💰 {price}{cal_str}")
+            if nutri_list:
+                lines.append(f"  <i>{' | '.join(nutri_list)}</i>")
             item_idx += 1
         lines.append("")
         
     if selections:
         lines.append("<b>📊 NUTRITIONAL SUMMARY</b>")
-        lines.append(f"🔥 Total Calories: <b>{total_calories} kcal</b>")
+        lines.append(f"🔥 Calories: <b>{totals['kcal']} kcal</b>")
+        lines.append(f"🥩 Fat: <b>{totals['fat']:.1f}g</b> | 🍞 Carbs: <b>{totals['carbs']:.1f}g</b>")
+        lines.append(f"💪 Protein: <b>{totals['protein']:.1f}g</b> | 🧂 Salt: <b>{totals['salt']:.1f}g</b>")
         lines.append("")
         
-    lines.append("<i>Click items below to select them and calculate total calories.</i>")
+    lines.append("<i>Click items below to select them and calculate total nutrients.</i>")
     return "\n".join(lines)
 
 @dp.message(Command("start"))

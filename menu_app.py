@@ -137,18 +137,42 @@ async def get_sodexo_menu(url: str, headless: bool, target_date_str: str = None,
                                 await page.wait_for_selector(nutri_tab_selector, timeout=5000)
                                 await page.click(nutri_tab_selector)
                                 
-                                # Extract calories from the table
-                                kcal_cell = page.locator('table.push-bottom tr:has-text("kcal") td, table tr:has-text("Brennwert") td').last
-                                await kcal_cell.wait_for(state="visible", timeout=5000)
-                                kcal_text = await kcal_cell.inner_text()
-                                
-                                # Clean up: 385 kJ 93 kcal -> 93
-                                # We look specifically for the number preceding 'kcal'
-                                match = re.search(r'(\d+)\s*kcal', kcal_text)
-                                if match:
-                                    item['calories'] = int(match.group(1))
-                                else:
-                                    item['calories'] = kcal_text.strip()
+                                # Extract all nutritional info from the table
+                                nutrients = await page.evaluate('''() => {
+                                    const rows = Array.from(document.querySelectorAll('table.push-bottom tr, table tr'));
+                                    const data = {};
+                                    rows.forEach(row => {
+                                        const cells = row.querySelectorAll('td');
+                                        if (cells.length >= 2) {
+                                            const label = cells[0].textContent.trim().toLowerCase();
+                                            const value = cells[cells.length - 1].textContent.trim();
+                                            data[label] = value;
+                                        }
+                                    });
+                                    return data;
+                                }''')
+
+                                # Map German/English keys to our internal keys
+                                item['nutrients'] = {}
+                                for label, value in nutrients.items():
+                                    if 'kcal' in label or 'brennwert' in label:
+                                        match = re.search(r'(\d+)\s*kcal', value)
+                                        if match:
+                                            item['calories'] = int(match.group(1))
+                                            item['nutrients']['energy_kcal'] = int(match.group(1))
+                                        
+                                        match_kj = re.search(r'(\d+)\s*kj', value.lower())
+                                        if match_kj:
+                                            item['nutrients']['energy_kj'] = int(match_kj.group(1))
+                                    
+                                    elif 'fett' in label or 'fat' in label:
+                                        item['nutrients']['fat'] = value
+                                    elif 'eiweiß' in label or 'protein' in label:
+                                        item['nutrients']['protein'] = value
+                                    elif 'kohlenhydrate' in label or 'carbohydrate' in label:
+                                        item['nutrients']['carbs'] = value
+                                    elif 'salz' in label or 'salt' in label:
+                                        item['nutrients']['salt'] = value
                                 
                                 # Go back to the menu
                                 await page.go_back(wait_until="domcontentloaded")
@@ -207,12 +231,21 @@ def format_menu(menu_data, telegram=False):
                     price = item['price'].replace('<', '&lt;').replace('>', '&gt;')
                     name_ru = item.get('name_ru', '').replace('<', '&lt;').replace('>', '&gt;')
                     cal = item.get('calories', '')
-                    
                     cal_str = f" | ⚡ {cal} kcal" if cal else ""
                     lines.append(f"• <b>{name}</b>")
                     if name_ru:
                         lines.append(f"  └ <i>{name_ru}</i>")
+                    
+                    nutri_list = []
+                    n = item.get('nutrients', {})
+                    if n.get('fat'): nutri_list.append(f"🥩 Fat: {n['fat']}")
+                    if n.get('carbs'): nutri_list.append(f"🍞 Carbs: {n['carbs']}")
+                    if n.get('protein'): nutri_list.append(f"💪 Protein: {n['protein']}")
+                    if n.get('salt'): nutri_list.append(f"🧂 Salt: {n['salt']}")
+                    
                     lines.append(f"  💰 {price}{cal_str}")
+                    if nutri_list:
+                        lines.append(f"  <i>{' | '.join(nutri_list)}</i>")
             lines.append("")
         return "\n".join(lines)
     
@@ -231,6 +264,15 @@ def format_menu(menu_data, telegram=False):
             cal = item.get('calories', '')
             cal_str = f" ({cal} kcal)" if cal else ""
             lines.append(f"  {item['name']:<45} | {item['price']}{cal_str}")
+            n = item.get('nutrients', {})
+            if n:
+                nutri_line = "    "
+                if n.get('fat'): nutri_line += f"Fat: {n['fat']} "
+                if n.get('carbs'): nutri_line += f"Carbs: {n['carbs']} "
+                if n.get('protein'): nutri_line += f"Prot: {n['protein']} "
+                if n.get('salt'): nutri_line += f"Salt: {n['salt']}"
+                if nutri_line.strip():
+                    lines.append(nutri_line)
         lines.append("")
     return "\n".join(lines)
 
