@@ -3,3 +3,4 @@ deep-translator==1.11.4
 aiogram==3.26.0
 python-dotenv==1.2.2
 newrelic==10.6.0
+apscheduler==3.11.2

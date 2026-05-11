@@ -58,6 +58,8 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from dotenv import load_dotenv
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 from menu_app import get_sodexo_menu, format_menu, DEFAULT_URL, instrument_task
 
@@ -87,6 +89,27 @@ dp = Dispatcher()
 menu_cache = {} # { "DD.MM": [menu_data_objects] }
 # user_selections: { user_id: { "DD.MM": [selected_item_indices] } }
 user_selections = {}
+
+async def pre_load_menus():
+    logging.info("Starting background menu pre-load for the next 7 days...")
+    now = datetime.datetime.now()
+    for i in range(7):
+        target_date = now + datetime.timedelta(days=i)
+        if target_date.weekday() >= 5: # Skip weekends
+            continue
+            
+        date_str = target_date.strftime("%d.%m")
+        if date_str not in menu_cache:
+            logging.info(f"Pre-loading menu for {date_str}...")
+            try:
+                # Use background_task instrumentation if available
+                menu_data = await get_sodexo_menu(DEFAULT_URL, headless=True, target_date_str=date_str, fetch_calories=True)
+                menu_cache[date_str] = menu_data
+                logging.info(f"Successfully pre-loaded {date_str}")
+                await asyncio.sleep(2) # Be nice to the server
+            except Exception as e:
+                logging.error(f"Failed to pre-load {date_str}: {e}")
+    logging.info("Background menu pre-load finished.")
 
 def get_date_keyboard():
     builder = InlineKeyboardBuilder()
@@ -277,6 +300,16 @@ async def process_text_date(message: types.Message):
 
 async def main():
     print("Bot is starting...")
+    
+    # Run once at startup in background to fill cache
+    asyncio.create_task(pre_load_menus())
+    
+    # Setup scheduler for daily updates
+    scheduler = AsyncIOScheduler()
+    # Run daily at 6:00 AM
+    scheduler.add_job(pre_load_menus, CronTrigger(hour=6, minute=0))
+    scheduler.start()
+    
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
