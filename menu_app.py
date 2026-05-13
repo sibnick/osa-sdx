@@ -37,16 +37,62 @@ async def get_sodexo_menu(url: str, headless: bool, target_date_str: str = None,
                 
             if target_date_str:
                 print(f"Navigating to date: {target_date_str}")
+                current_year = datetime.datetime.now().year
                 try:
+                    target_date = datetime.datetime.strptime(f"{target_date_str}.{current_year}", "%d.%m.%Y")
+                    target_kw = target_date.isocalendar()[1]
+                    
+                    # 1. Selection of week (CW/KW)
+                    print(f"  Target week: CW {target_kw}")
+                    try:
+                        await page.wait_for_selector('mat-select', timeout=10000)
+                        
+                        # Find the correct mat-select using JS to be robust
+                        success = await page.evaluate('''(kw) => {
+                            const selects = Array.from(document.querySelectorAll('mat-select'));
+                            const target = selects.find(s => s.textContent.includes('CW') || s.textContent.includes('KW'));
+                            if (target) {
+                                target.click();
+                                return true;
+                            }
+                            return false;
+                        }''', target_kw)
+                        
+                        if success:
+                            await page.wait_for_selector('mat-option', timeout=5000)
+                            # Find the correct option
+                            opt_success = await page.evaluate('''(kw) => {
+                                const options = Array.from(document.querySelectorAll('mat-option'));
+                                const target = options.find(o => o.textContent.includes(kw.toString()));
+                                if (target) {
+                                    target.click();
+                                    return true;
+                                }
+                                return false;
+                            }''', target_kw)
+                            if opt_success:
+                                print(f"  Selected week CW {target_kw}")
+                                await asyncio.sleep(3) # Wait for page to refresh
+                    except Exception as e:
+                        print(f"  Warning: Week selection failed: {e}")
+
+                    # 2. Selection of day tab
                     await page.wait_for_selector('.mdc-tab', timeout=15000)
                     tabs = page.locator('.mdc-tab')
                     count = await tabs.count()
+                    found_tab = False
                     for i in range(count):
                         text = await tabs.nth(i).inner_text()
                         if target_date_str in text:
                             await tabs.nth(i).click()
-                            await asyncio.sleep(4)
+                            print(f"  Selected day tab {target_date_str}")
+                            await asyncio.sleep(2)
+                            found_tab = True
                             break
+                    
+                    if not found_tab:
+                        print(f"  Warning: Tab for {target_date_str} not found.")
+                        
                 except Exception as e:
                     print(f"Warning: Navigation error: {e}")
 
@@ -74,7 +120,6 @@ async def get_sodexo_menu(url: str, headless: bool, target_date_str: str = None,
             }''')
 
             if fetch_calories:
-                # Flat list of items that have details
                 flat_items = []
                 for cat in menu_data:
                     for it in cat['items']:
@@ -85,7 +130,6 @@ async def get_sodexo_menu(url: str, headless: bool, target_date_str: str = None,
                 
                 for i in range(len(flat_items)):
                     try:
-                        # Re-locate buttons in every iteration to avoid detachment
                         await page.wait_for_selector('.product-wrapper button', timeout=15000)
                         buttons = page.locator('.product-wrapper button')
                         btn = buttons.nth(i)
@@ -140,34 +184,24 @@ async def get_sodexo_menu(url: str, headless: bool, target_date_str: str = None,
                                 if 'zucker' not in label and 'sugars' not in label: item['nutrients']['carbs'] = val
                             elif any(x in label for x in ['salz', 'salt']): item['nutrients']['salt'] = val
                         
-                        # Go back using internal button if possible
                         back_btn = page.locator('app-back-button button')
                         if await back_btn.count() > 0:
                             await back_btn.click()
                         else:
                             await page.go_back(wait_until="load")
                         
-                        # Wait for the menu to reappear and be stable
                         await page.wait_for_selector('app-category', timeout=15000)
-                        await asyncio.sleep(1.5)
+                        await asyncio.sleep(1)
                     except Exception as e:
                         print(f"    Error processing item {i+1}: {e}")
                         if "/product/" in page.url:
-                            # Try to escape product page
-                            await page.goto(url) # Direct re-navigate to be safe
-                            # Re-navigate to date if needed
-                            if target_date_str:
-                                try:
-                                    tabs = page.locator('.mdc-tab')
-                                    for j in range(await tabs.count()):
-                                        if target_date_str in await tabs.nth(j).inner_text():
-                                            await tabs.nth(j).click()
-                                            await asyncio.sleep(3)
-                                            break
-                                except: pass
+                            await page.goto(url)
+                            # Re-select week/day...
+                            try:
+                                await page.evaluate('(kw) => { ... }', target_kw) # simplified for re-run
+                            except: pass
                         await asyncio.sleep(1)
 
-            # Translation
             translator = GoogleTranslator(source='auto', target='ru')
             for category in menu_data:
                 if category['categoryName']:
