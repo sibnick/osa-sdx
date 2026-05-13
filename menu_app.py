@@ -93,7 +93,7 @@ async def get_sodexo_menu(url: str, headless: bool, target_date_str: str = None,
 
             # Extract basic info first
             menu_data = await page.evaluate('''() => {
-                const categories = Array.from(document.querySelectorAll('app-category'));
+                const categories = Array.from(document.querySelectorAll('app-category')).filter(el => el.offsetParent !== null);
                 return categories.map(cat => {
                     const categoryName = cat.querySelector('h3.category-header')?.textContent.trim() || 'Unknown';
                     const items = Array.from(cat.querySelectorAll('.product-wrapper')).map(row => {
@@ -108,96 +108,103 @@ async def get_sodexo_menu(url: str, headless: bool, target_date_str: str = None,
 
             if fetch_calories:
                 print("Extracting calories for each item (this may take a moment)...")
-                all_product_wrappers = page.locator('.product-wrapper')
-                wrapper_count = await all_product_wrappers.count()
                 
-                # Create a map for easy lookup
-                item_index = 0
                 for category in menu_data:
                     for item in category['items']:
-                        if item['hasDetails'] and item_index < wrapper_count:
-                            try:
-                                # Click the item
-                                print(f"  Fetching details for: {item['name']}")
-                                btn = all_product_wrappers.nth(item_index).locator('button').first
-                                await btn.scroll_into_view_if_needed()
-                                
-                                # Navigation-based detail view
-                                await btn.click()
-                                
-                                # Wait for product page to load (URL contains /product/)
-                                try:
-                                    await page.wait_for_url(re.compile(r'.*/product/.*'), timeout=10000)
-                                except:
-                                    print(f"    Warning: Page did not navigate for {item['name']}")
-                                    raise Exception("Navigation timeout")
+                        if not item['hasDetails']:
+                            continue
+                            
+                        try:
+                            print(f"  Fetching details for: {item['name']}")
+                            
+                            # Use a specific locator to avoid misalignment
+                            # We look for the product wrapper that contains the specific item name
+                            item_locator = page.locator('.product-wrapper').filter(has_text=item['name']).first
+                            btn = item_locator.locator('button').first
+                            
+                            if await btn.count() == 0:
+                                print(f"    Warning: Could not find button for {item['name']}, skipping.")
+                                continue
 
-                                # Find nutritional tab on the new page
-                                nutri_tab_selector = '.mdc-tab:has-text("NÄHRWERTE"), .mdc-tab:has-text("NUTRITIONAL INFORMATION")'
+                            await btn.scroll_into_view_if_needed()
+                            await btn.click()
+                            
+                            # Wait for product page to load
+                            try:
+                                await page.wait_for_url(re.compile(r'.*/product/.*'), timeout=10000)
+                            except:
+                                print(f"    Warning: Page did not navigate for {item['name']}")
+                                if "/product/" not in page.url:
+                                    continue
+
+                            # Find nutritional tab
+                            nutri_tab_selector = '.mdc-tab:has-text("NÄHRWERTE"), .mdc-tab:has-text("NUTRITIONAL INFORMATION"), .mdc-tab:has-text("Nährwerte")'
+                            try:
                                 await page.wait_for_selector(nutri_tab_selector, timeout=5000)
                                 await page.click(nutri_tab_selector)
-                                await asyncio.sleep(0.6) # Wait for table to render
-                                
-                                # Extract all nutritional info from the table
-                                nutrients = await page.evaluate('''() => {
-                                    const rows = Array.from(document.querySelectorAll('table.push-bottom tr, table tr'));
-                                    const data = {};
-                                    rows.forEach(row => {
-                                        const cells = row.querySelectorAll('td');
-                                        if (cells.length >= 2) {
-                                            const label = cells[0].textContent.trim().toLowerCase();
-                                            const value = cells[cells.length - 1].textContent.trim();
-                                            data[label] = value;
-                                        }
-                                    });
-                                    return data;
-                                }''')
-
-                                # Map German/English keys to our internal keys
-                                item['nutrients'] = {}
-                                for label, value in nutrients.items():
-                                    if 'kcal' in label or 'brennwert' in label or 'energy' in label:
-                                        # Value could be "1.819 kJ 435 kcal" or "1,819 kJ 435 kcal"
-                                        # Look for the number before 'kcal'
-                                        match = re.search(r'([\d.,]+)\s*kcal', value)
-                                        if match:
-                                            cal_str = match.group(1).replace(',', '').replace('.', '') # Remove thousand separators
-                                            item['calories'] = int(cal_str)
-                                            item['nutrients']['energy_kcal'] = int(cal_str)
-                                        
-                                        match_kj = re.search(r'([\d.,]+)\s*kj', value.lower())
-                                        if match_kj:
-                                            kj_str = match_kj.group(1).replace(',', '').replace('.', '')
-                                            item['nutrients']['energy_kj'] = int(kj_str)
-                                    
-                                    elif 'fett' in label or 'fat' in label:
-                                        if 'gesättigte' not in label and 'saturates' not in label:
-                                            item['nutrients']['fat'] = value
-                                    elif 'eiweiß' in label or 'protein' in label:
-                                        item['nutrients']['protein'] = value
-                                    elif 'kohlenhydrate' in label or 'carbohydrate' in label:
-                                        if 'zucker' not in label and 'sugars' not in label:
-                                            item['nutrients']['carbs'] = value
-                                    elif 'salz' in label or 'salt' in label:
-                                        item['nutrients']['salt'] = value
-                                
-                                # Go back to the menu
-                                await page.go_back(wait_until="domcontentloaded")
-                                # Wait for the menu to be ready again
-                                await page.wait_for_selector('.product-wrapper', timeout=10000)
-                                # Re-locate wrappers as DOM might have refreshed
-                                all_product_wrappers = page.locator('.product-wrapper')
-                                await asyncio.sleep(0.3)
-                            except Exception as e:
-                                print(f"    Error fetching calories for {item['name']}: {e}")
-                                item['calories'] = None
-                                # Try to get back to menu if stuck
-                                if "/product/" in page.url:
-                                    await page.go_back()
-                                    await page.wait_for_selector('.product-wrapper', timeout=10000)
-                                    all_product_wrappers = page.locator('.product-wrapper')
                                 await asyncio.sleep(0.5)
-                        item_index += 1
+                            except:
+                                print(f"    Warning: Could not find nutritional tab for {item['name']}")
+                                await page.go_back()
+                                continue
+                            
+                            # Extract all nutritional info
+                            nutrients = await page.evaluate('''() => {
+                                const rows = Array.from(document.querySelectorAll('table tr'));
+                                const data = {};
+                                let lastLabel = '';
+                                rows.forEach(row => {
+                                    const cells = Array.from(row.querySelectorAll('td'));
+                                    if (cells.length >= 2) {
+                                        let label = cells[0].textContent.trim().toLowerCase();
+                                        if (!label && lastLabel) label = lastLabel;
+                                        else if (label) lastLabel = label;
+                                        
+                                        if (label) {
+                                            const value = cells[cells.length - 1].textContent.trim();
+                                            if (data[label]) data[label] += ' ' + value;
+                                            else data[label] = value;
+                                        }
+                                    }
+                                });
+                                return data;
+                            }''')
+
+                            item['nutrients'] = {}
+                            for label, value in nutrients.items():
+                                if 'kcal' in label or 'brennwert' in label or 'energy' in label or 'energie' in label:
+                                    # Look for kcal value
+                                    match_kcal = re.search(r'([\d.,]+)\s*kcal', value.lower())
+                                    if match_kcal:
+                                        cal_val = match_kcal.group(1).replace('.', '').replace(',', '')
+                                        item['calories'] = int(cal_val)
+                                        item['nutrients']['energy_kcal'] = value
+                                    
+                                    match_kj = re.search(r'([\d.,]+)\s*kj', value.lower())
+                                    if match_kj:
+                                        item['nutrients']['energy_kj'] = value
+                                
+                                elif 'fett' in label or 'fat' in label:
+                                    if 'gesätt' not in label and 'saturates' not in label:
+                                        item['nutrients']['fat'] = value
+                                elif 'eiweiß' in label or 'protein' in label:
+                                    item['nutrients']['protein'] = value
+                                elif 'kohlenhydrate' in label or 'carbohydrate' in label:
+                                    if 'zucker' not in label and 'sugars' not in label:
+                                        item['nutrients']['carbs'] = value
+                                elif 'salz' in label or 'salt' in label:
+                                    item['nutrients']['salt'] = value
+                            
+                            # Go back to the menu
+                            await page.go_back(wait_until="domcontentloaded")
+                            await page.wait_for_selector('.product-wrapper', timeout=10000)
+                            await asyncio.sleep(0.5)
+                        except Exception as e:
+                            print(f"    Error fetching calories for {item['name']}: {e}")
+                            if "/product/" in page.url:
+                                await page.go_back()
+                                await page.wait_for_selector('.product-wrapper', timeout=10000)
+                            await asyncio.sleep(0.5)
 
             print("Translating menu to Russian...")
             translator = GoogleTranslator(source='auto', target='ru')

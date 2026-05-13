@@ -22,38 +22,53 @@ def parse_value(val):
     if not val: return 0.0
     if isinstance(val, (int, float)): return float(val)
     s = str(val).strip()
+    
     # Remove everything except digits, dots, and commas
     s = re.sub(r'[^\d.,]', '', s)
     if not s: return 0.0
     
-    # If both exist, determine by positions
+    # German format: 1.234,56
+    # English format: 1,234.56
+    
     if '.' in s and ',' in s:
-        if s.rfind('.') < s.rfind(','): # German 1.234,56
+        if s.rfind('.') < s.rfind(','): # German
             s = s.replace('.', '').replace(',', '.')
-        else: # English 1,234.56
+        else: # English
             s = s.replace(',', '')
     elif ',' in s:
-        # If it's like "1,819" it's likely thousand (English). If "19,0" it's decimal (German).
+        # If it's something like "1,230" it's ambiguous.
         parts = s.split(',')
         if len(parts) == 2 and len(parts[1]) == 3:
-            # Ambiguous. If the value is for energy, it's thousands. 
-            # If it's for salt/fat, it's decimal. 
-            # Most nutrients are < 100.
-            if float(s.replace(',', '.')) < 100: s = s.replace(',', '.')
-            else: s = s.replace(',', '')
+            # Check if it's likely a decimal (German) or thousand (English)
+            # Most nutrients (except kJ) are < 100.
+            try:
+                val_if_decimal = float(s.replace(',', '.'))
+                if val_if_decimal < 100:
+                    s = s.replace(',', '.')
+                else:
+                    s = s.replace(',', '')
+            except:
+                s = s.replace(',', '.')
         else:
             s = s.replace(',', '.')
     elif '.' in s:
-        # If it's like "1.819" it's likely thousand (German). If "19.0" it's decimal (English).
+        # If it's something like "1.230" it's ambiguous.
         parts = s.split('.')
         if len(parts) == 2 and len(parts[1]) == 3:
-            if float(s) < 100: pass # keep as is
-            else: s = s.replace('.', '')
-            
+            try:
+                val_as_is = float(s)
+                if val_as_is > 100: # Likely German thousand 1.230
+                    s = s.replace('.', '')
+                else: # Likely English decimal 1.230
+                    pass
+            except:
+                pass
+    
     try:
         return float(s)
     except:
         return 0.0
+
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -171,7 +186,7 @@ def format_menu_with_total(date_str, menu_data, user_id):
             nutri = item.get('nutrients', {})
             
             if is_selected:
-                totals['kcal'] += int(cal) if isinstance(cal, (int, str)) and str(cal).isdigit() else 0
+                totals['kcal'] += int(cal) if isinstance(cal, (int, str, float)) and str(cal).replace('.0','').isdigit() else 0
                 totals['fat'] += parse_value(nutri.get('fat'))
                 totals['protein'] += parse_value(nutri.get('protein'))
                 totals['carbs'] += parse_value(nutri.get('carbs'))
@@ -204,22 +219,6 @@ def format_menu_with_total(date_str, menu_data, user_id):
         
     lines.append("<i>Click items below to select them and calculate total nutrients.</i>")
     return "\n".join(lines)
-
-@dp.message(Command("start"))
-@instrument_task
-async def cmd_start(message: types.Message):
-    await message.answer(
-        "👋 <b>Welcome to Sodexo Berlin Menu Bot!</b>\n\n"
-        "I can help you check the daily menu and calculate calories.\n"
-        "Please select a date to begin:",
-        reply_markup=get_date_keyboard(),
-        parse_mode="HTML"
-    )
-
-@dp.message(Command("menu"))
-@instrument_task
-async def cmd_menu(message: types.Message):
-    await message.answer("📅 Select a date:", reply_markup=get_date_keyboard())
 
 @dp.callback_query(F.data == "back_to_dates")
 async def process_back_to_dates(callback: types.CallbackQuery):
@@ -272,11 +271,10 @@ async def process_item_selection(callback: types.CallbackQuery):
     menu_data = menu_cache.get(date_str)
     if menu_data:
         text = format_menu_with_total(date_str, menu_data, user_id)
-        # Use edit_text only if content changed to avoid flicker (though selections always change it)
         try:
             await callback.message.edit_text(text, reply_markup=get_menu_keyboard(date_str, menu_data, user_id), parse_mode="HTML")
         except Exception:
-            pass # Message is not modified
+            pass 
     await callback.answer()
 
 @dp.callback_query(F.data.startswith("clear_"))
@@ -293,6 +291,22 @@ async def process_clear_selections(callback: types.CallbackQuery):
         await callback.message.edit_text(text, reply_markup=get_menu_keyboard(date_str, menu_data, user_id), parse_mode="HTML")
     await callback.answer("Selections cleared.")
 
+@dp.message(Command("start"))
+@instrument_task
+async def cmd_start(message: types.Message):
+    await message.answer(
+        "👋 <b>Welcome to Sodexo Berlin Menu Bot!</b>\n\n"
+        "I can help you check the daily menu and calculate calories.\n"
+        "Please select a date to begin:",
+        reply_markup=get_date_keyboard(),
+        parse_mode="HTML"
+    )
+
+@dp.message(Command("menu"))
+@instrument_task
+async def cmd_menu(message: types.Message):
+    await message.answer("📅 Select a date:", reply_markup=get_date_keyboard())
+
 @dp.message(F.text.regexp(r"\d{2}\.\d{2}"))
 @instrument_task
 async def process_text_date(message: types.Message):
@@ -306,7 +320,6 @@ async def main():
     
     # Setup scheduler for daily updates
     scheduler = AsyncIOScheduler()
-    # Run daily at 6:00 AM
     scheduler.add_job(pre_load_menus, CronTrigger(hour=6, minute=0))
     scheduler.start()
     
